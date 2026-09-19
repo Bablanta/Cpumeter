@@ -1,0 +1,16 @@
+# Virtual environment
+.venv/
+*/.venv/
+
+# Python cache
+__pycache__/
+*/__pycache__/
+*.pyc
+
+# Build artifacts & compiled binaries
+build/
+dist/
+dist_installer/
+*/build/
+*/dist/
+*/dist_installer/

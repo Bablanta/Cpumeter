@@ -1,0 +1,9 @@
+# Core runtime dependencies
+psutil>=5.9.0
+pillow>=10.0.0
+pythonnet>=3.0.0
+clr_loader>=0.2.6
+matplotlib>=3.8.0
+
+# Packaging (optional, for developers)
+pyinstaller>=6.0.0
