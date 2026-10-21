@@ -2,20 +2,18 @@
 
 # Cpumeter — CpuCore0Meter
 
-Ultra-smooth real-time CPU **Core 0** temperature monitoring for Windows: a 5 cm analog
-desktop widget, a full analog gauge, and a classic per-core graph.
+Ultra-smooth real-time CPU temperature monitoring for Windows: a compact 4 cm
+borderless mini meter (fixed size).
 
 > Source code, full documentation, launchers and build scripts live in
 > [`CpuCoresTemperatureGraph/`](CpuCoresTemperatureGraph/README.md).
 
 ## Highlights
 
-- 5 cm borderless mini meter with 4x supersampled (SSAA) rendering and a 60 FPS
+- 4 cm borderless mini meter with 4x supersampled (SSAA) rendering and a 60 FPS
   spring/lerp needle.
-- Switchable styles (digital hub / pure analog), four themes, three diameters, window
-  transparency and always-on-top — all from the right-click menu.
-- Full analog gauge with stats cards and a sparkline, plus a Matplotlib graph view
-  (`--view graph --core all`).
+- Pure analog style, three themes, system tray icon, window transparency
+  and always-on-top — all from the right-click menu or tray.
 - Exact per-core temperatures via `LibreHardwareMonitorLib.dll`, read by an elevated
   helper process over loopback TCP so the GUI itself always stays unelevated.
 
@@ -24,7 +22,7 @@ desktop widget, a full analog gauge, and a classic per-core graph.
 ```bat
 git clone https://github.com/Bablanta/Cpumeter.git
 cd Cpumeter\CpuCoresTemperatureGraph
-run_compact.bat
+run.bat
 ```
 
 The launcher creates `.venv` and installs `requirements.txt` automatically. See

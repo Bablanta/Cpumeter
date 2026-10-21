@@ -4,28 +4,39 @@ Compact Mini Gauge View Plugin for CpuCoresTemperatureGraph.
 
 Features:
 - Ultra-smooth 4K anti-aliased rendering using 4x supersampling (SSAA) with Pillow LANCZOS.
-- Compact 5cm diameter circular analog meter dedicated exclusively to CPU Core 0.
+- Compact 4cm (150 px) circular analog meter dedicated exclusively to a single CPU core.
 - Fluid 60 FPS needle animation with spring/lerp physics (no abrupt stepping).
 - Zero text overlap: Center hub is isolated and framed, with unobstructed readability.
 - Switchable modes:
-    * Compact with Digital Hub (includes digital °C and Core 0 badge)
+    * Compact with Digital Hub (includes digital °C and core badge)
     * Minimalist Pure Analog (clean precision instrument with jewel cap)
 - Multiple luxury themes:
     * dark_luxury (obsidian & gold / ice-blue)
     * cyberpunk (neon cyan & hot magenta HUD)
-    * minimal_silver (clean brushed aluminum)
     * sport_racing (matte carbon & racing red tachometer)
 - Borderless floating circular widget with left-click drag support anywhere on desktop.
-- Right-click context menu for instantaneous switching of themes, styles, diameter, opacity, and always-on-top.
+- Right-click context menu for instantaneous switching of themes, styles, opacity,
+  and always-on-top.
 """
 
 import math
+import os
 import time
 import threading
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk, ImageFont
+import pystray
+from pystray import MenuItem as Item, Menu
 from .base import BaseViewPlugin
 from .autostart import is_autostart_enabled, set_autostart
+from .sensor_client import start_sensor_helper, is_helper_running
+from .logging_setup import get_log_dir
+
+
+# The widget has a fixed size: Mini 4cm (~150 px at 96 DPI).
+WIDGET_SIZE = 150
+# Layout is designed for 190 px and downscaled, keeping the original proportions.
+DESIGN_SIZE = 190
 
 
 THEMES = {
@@ -71,27 +82,6 @@ THEMES = {
         "tick_min": (150, 0, 200, 200),
         "scale_txt": (0, 240, 255, 255),
     },
-    "minimal_silver": {
-        "name": "Minimalist Silver",
-        "bg": (235, 238, 242, 255),
-        "dial": (255, 255, 255, 255),
-        "bezel_outer": (176, 184, 193, 255),
-        "bezel_inner": (225, 228, 232, 255),
-        "track_bg": (234, 238, 242, 255),
-        "normal": (26, 127, 55, 255),
-        "warm": (154, 103, 0, 255),
-        "hot": (207, 34, 46, 255),
-        "needle": (9, 105, 218, 255),
-        "needle_glow": (9, 105, 218, 90),
-        "needle_spine": (255, 255, 255, 240),
-        "hub_bg": (246, 248, 250, 255),
-        "hub_border": (208, 215, 222, 255),
-        "hub_text": (9, 105, 218, 255),
-        "hub_sub": (87, 96, 106, 255),
-        "tick_maj": (31, 35, 40, 255),
-        "tick_min": (140, 149, 159, 220),
-        "scale_txt": (66, 74, 83, 255),
-    },
     "sport_racing": {
         "name": "Sport Racing",
         "bg": (10, 10, 10, 255),
@@ -118,12 +108,12 @@ THEMES = {
 
 class CompactGaugePlugin(BaseViewPlugin):
     """
-    Compact 5cm circular analog meter plugin with 4K SSAA rendering and smooth 60 FPS animation.
+    Compact 4cm (150 px) circular analog meter with 4x SSAA rendering and smooth 60 FPS animation.
     """
 
     plugin_id = "compact"
     plugin_name = "Compact Mini Gauge"
-    description = "Ultra-smooth 4K 5cm circular analog meter dedicated exclusively to CPU Core 0"
+    description = "Ultra-smooth 4K 4cm circular analog meter for a single CPU core"
 
     def __init__(self, sensor_monitor, get_processor_info_func, options=None):
         super().__init__(sensor_monitor, get_processor_info_func, options)
@@ -140,10 +130,8 @@ class CompactGaugePlugin(BaseViewPlugin):
         if self.current_theme not in THEMES:
             self.current_theme = 'dark_luxury'
 
-        self.display_style = "compact"  # 'compact' (with digital hub) or 'minimal' (pure analog)
-        
-        # Dimensions (~5cm on typical 96 DPI display is ~190 px)
-        self.size = 190
+        # Dimensions: fixed Mini size (~4cm / 150 px at 96 DPI)
+        self.size = WIDGET_SIZE
         self.scale = 4  # 4x Supersampling for true 4K sharpness
         self.always_on_top = getattr(options, 'top', False) if options else False
         self.transparent_circle = True
@@ -152,12 +140,9 @@ class CompactGaugePlugin(BaseViewPlugin):
         # Temperatures & Animation
         self.target_temp = 40.0
         self.display_temp = 40.0
-        self.critical_temp = 100.0
-        self.high_temp = 85.0
-        self.min_temp = 999.0
-        self.max_temp = 0.0
         self.core_label = f"Core {self.target_core_index}"
-        self.next_view = None
+        self.has_data = False
+        self.sensor_error = None
 
         # Drag state
         self._drag_start_x = 0
@@ -170,6 +155,10 @@ class CompactGaugePlugin(BaseViewPlugin):
         self.context_menu = None
         self.poll_thread = None
 
+        # System tray
+        self.tray_icon = None
+        self._exit_requested = False
+
         # Cache fonts
         self._load_fonts()
 
@@ -178,9 +167,9 @@ class CompactGaugePlugin(BaseViewPlugin):
         s = self.scale
         try:
             self.font_tick = ImageFont.truetype('segoeui.ttf', int(7 * s))
-            self.font_temp = ImageFont.truetype('segoeuib.ttf', int(13 * s))
+            self.font_temp = ImageFont.truetype('segoeuib.ttf', int(15 * s))
             self.font_lbl = ImageFont.truetype('segoeuib.ttf', int(6 * s))
-            self.font_min_lbl = ImageFont.truetype('segoeuib.ttf', int(7.5 * s))
+            self.font_min_lbl = ImageFont.truetype('segoeuib.ttf', int(12 * s))
         except Exception:
             self.font_tick = ImageFont.load_default()
             self.font_temp = ImageFont.load_default()
@@ -192,7 +181,10 @@ class CompactGaugePlugin(BaseViewPlugin):
         while self.running:
             try:
                 cores = self.sensor_monitor.get_core_temperatures()
-                if cores:
+                if not cores:
+                    self.has_data = False
+                    self.sensor_error = getattr(self.sensor_monitor, 'last_error', None)
+                else:
                     core_obj = None
                     for idx, c in enumerate(cores):
                         if idx == self.target_core_index or c.label == f"Core {self.target_core_index}":
@@ -204,22 +196,18 @@ class CompactGaugePlugin(BaseViewPlugin):
                     if core_obj:
                         val = float(core_obj.current)
                         self.target_temp = val
-                        self.critical_temp = float(core_obj.critical)
-                        self.high_temp = float(core_obj.high)
                         self.core_label = core_obj.label
-
-                        if val < self.min_temp and val > 0:
-                            self.min_temp = val
-                        if val > self.max_temp:
-                            self.max_temp = val
-            except Exception:
-                pass
+                        self.has_data = True
+                        self.sensor_error = None
+            except Exception as e:
+                self.has_data = False
+                self.sensor_error = repr(e)
             time.sleep(0.3)
 
     def render_gauge_image(self):
         """Renders the dial at 4x resolution and downsamples with LANCZOS for 4K smoothness."""
         t = THEMES[self.current_theme]
-        dim = self.size * self.scale
+        dim = DESIGN_SIZE * self.scale
         cx, cy = dim / 2.0, dim / 2.0
         s = self.scale
         r = (dim / 2.0) - (6 * s)
@@ -244,7 +232,8 @@ class CompactGaugePlugin(BaseViewPlugin):
         d.arc([cx - track_r, cy - track_r, cx + track_r, cy + track_r], start=135, end=405, fill=t['track_bg'], width=track_w)
 
         # Dynamic active arc up to current animated temperature
-        cur_frac = max(0.0, min(self.display_temp / 100.0, 1.0))
+        eff_temp = self.display_temp if self.has_data else 0.0
+        cur_frac = max(0.0, min(eff_temp / 100.0, 1.0))
         cur_deg = start_deg + cur_frac * sweep
         deg_55 = start_deg + (55.0 / 100.0) * sweep
         deg_75 = start_deg + (75.0 / 100.0) * sweep
@@ -295,7 +284,7 @@ class CompactGaugePlugin(BaseViewPlugin):
         p_cos = math.cos(perp_rad)
         p_sin = math.sin(perp_rad)
 
-        hub_r = (30 * s) if self.display_style == 'compact' else (14 * s)
+        hub_r = 30 * s
         needle_len = track_r + (2 * s)
         tip = (cx + needle_len * n_cos, cy + needle_len * n_sin)
 
@@ -316,36 +305,26 @@ class CompactGaugePlugin(BaseViewPlugin):
         # Needle central sharp highlight spine
         d.line([(cx + base_dist * n_cos, cy + base_dist * n_sin), tip], fill=t['needle_spine'], width=int(1.2 * s))
 
-        # 5. Center Hub Overlay
-        if self.display_style == 'compact':
-            # Solid circular hub protecting central readout
-            d.ellipse([cx - hub_r, cy - hub_r, cx + hub_r, cy + hub_r], fill=t['hub_bg'], outline=t['hub_border'], width=int(2 * s))
-            d.ellipse([cx - (hub_r - 2*s), cy - (hub_r - 2*s), cx + (hub_r - 2*s), cy + (hub_r - 2*s)], outline=t['bezel_inner'], width=int(1 * s))
+        # 5. Center Hub Overlay (solid hub like the previous UI, with the
+        #    digital temperature readout in the middle of the needle circle)
+        d.ellipse([cx - hub_r, cy - hub_r, cx + hub_r, cy + hub_r], fill=t['hub_bg'], outline=t['hub_border'], width=int(2 * s))
+        d.ellipse([cx - (hub_r - 2*s), cy - (hub_r - 2*s), cx + (hub_r - 2*s), cy + (hub_r - 2*s)], outline=t['bezel_inner'], width=int(1 * s))
 
-            # Digital temperature
-            txt_t = f"{self.display_temp:.1f}°"
-            bbox_t = self.font_temp.getbbox(txt_t)
-            tw_t = bbox_t[2] - bbox_t[0]
-            th_t = bbox_t[3] - bbox_t[1]
-            d.text((cx - tw_t/2.0, cy - th_t/2.0 - 4*s), txt_t, fill=t['hub_text'], font=self.font_temp)
+        # Digital temperature readout in the center of the hub (font 15*s)
+        txt_t = f"{self.display_temp:.1f}°" if self.has_data else "--°"
+        bbox_t = self.font_temp.getbbox(txt_t)
+        tw_t = bbox_t[2] - bbox_t[0]
+        th_t = bbox_t[3] - bbox_t[1]
+        d.text((cx - tw_t/2.0, cy - th_t/2.0 - 4*s), txt_t, fill=t['hub_text'], font=self.font_temp)
 
-            # Core badge
-            txt_c = "CORE 0"
-            bbox_c = self.font_lbl.getbbox(txt_c)
-            tw_c = bbox_c[2] - bbox_c[0]
-            d.text((cx - tw_c/2.0, cy + 9*s), txt_c, fill=t['hub_sub'], font=self.font_lbl)
-        else:
-            # Minimalist precision jewel cap
-            d.ellipse([cx - hub_r, cy - hub_r, cx + hub_r, cy + hub_r], fill=t['hub_bg'], outline=t['needle'], width=int(2 * s))
-            d.ellipse([cx - hub_r/2.0, cy - hub_r/2.0, cx + hub_r/2.0, cy + hub_r/2.0], fill=t['needle'])
+        # Core badge (bigger, below the hub)
+        txt_c = self.core_label.upper() if self.has_data else "SENSOR OFF"
+        bbox_c = self.font_min_lbl.getbbox(txt_c)
+        tw_c = bbox_c[2] - bbox_c[0]
+        th_c = bbox_c[3] - bbox_c[1]
+        d.text((cx - tw_c/2.0, cy + (hub_r + 6*s)), txt_c, fill=t['hub_sub'], font=self.font_min_lbl)
 
-            # Bottom minimalist badge
-            txt_c = "CORE 0"
-            bbox_c = self.font_min_lbl.getbbox(txt_c)
-            tw_c = bbox_c[2] - bbox_c[0]
-            d.text((cx - tw_c/2.0, cy + 24*s), txt_c, fill=t['hub_sub'], font=self.font_min_lbl)
-
-        # 6. Downsample with LANCZOS to target size (4K supersampled look)
+        # 6. Downsample with LANCZOS to the fixed widget size (4K supersampled look)
         final_img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
         return final_img
 
@@ -392,20 +371,106 @@ class CompactGaugePlugin(BaseViewPlugin):
         self.root.geometry(f"+{x}+{y}")
 
     def _show_context_menu(self, event):
+        self._build_context_menu()
         if self.context_menu:
             try:
                 self.context_menu.tk_popup(event.x_root, event.y_root)
             finally:
                 self.context_menu.grab_release()
 
+    def _start_sensor_service(self):
+        if not start_sensor_helper():
+            self.sensor_error = "Sensor Service tidak dapat dimulai (UAC ditolak?)"
+
+    def _open_log_dir(self):
+        try:
+            os.startfile(get_log_dir())
+        except Exception:
+            pass
+
+    def _create_tray_image(self):
+        """Build a small tray icon image (a colored circle)."""
+        size = 64
+        img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        t = THEMES.get(self.current_theme, THEMES['dark_luxury'])
+        d.ellipse([4, 4, size - 4, size - 4], fill=t['needle'], outline=t['bezel_outer'], width=3)
+        d.ellipse([size//2 - 6, size//2 - 6, size//2 + 6, size//2 + 6], fill=t['needle_spine'])
+        return img
+
+    def _hide_to_tray(self):
+        if self.root:
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+
+    def _show_window(self):
+        if self.root:
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+            except Exception:
+                pass
+
+    def _exit_app(self):
+        self._exit_requested = True
+        self.running = False
+        if self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        if self.root:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+
+    def _set_theme_from_tray(self, theme_key):
+        def _apply():
+            if theme_key in THEMES:
+                self.current_theme = theme_key
+                self._build_context_menu()
+        if self.root:
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                _apply()
+
+    def _start_tray(self):
+        def on_show(icon, item):
+            if self.root:
+                self.root.after(0, self._show_window)
+
+        def on_exit(icon, item):
+            if self.root:
+                self.root.after(0, self._exit_app)
+
+        def make_theme_action(key):
+            def action(icon, item):
+                self._set_theme_from_tray(key)
+            return action
+
+        theme_items = [Item(th_info["name"], make_theme_action(k)) for k, th_info in THEMES.items()]
+
+        menu = Menu(
+            Item("Tampilkan", on_show, default=True),
+            Menu.SEPARATOR,
+            Item("Tema", Menu(*theme_items)),
+            Menu.SEPARATOR,
+            Item("Keluar", on_exit),
+        )
+
+        self.tray_icon = pystray.Icon("CpuCore0Meter", self._create_tray_image(), "CpuCore0Meter", menu)
+        try:
+            self.tray_icon.run()
+        except Exception:
+            pass
+
     def _build_context_menu(self):
         menu = tk.Menu(self.root, tearoff=0, bg="#161b22", fg="#f0f6fc", activebackground="#1f6feb", activeforeground="#ffffff")
-
-        # Style Submenu
-        style_menu = tk.Menu(menu, tearoff=0, bg="#161b22", fg="#f0f6fc", activebackground="#1f6feb", activeforeground="#ffffff")
-        style_menu.add_command(label="Compact dengan Hub Digital (°C)", command=lambda: self.set_style("compact"))
-        style_menu.add_command(label="Minimalis Analog Murni", command=lambda: self.set_style("minimal"))
-        menu.add_cascade(label="Tampilan (Style)", menu=style_menu)
 
         # Theme Submenu
         theme_menu = tk.Menu(menu, tearoff=0, bg="#161b22", fg="#f0f6fc", activebackground="#1f6feb", activeforeground="#ffffff")
@@ -413,12 +478,24 @@ class CompactGaugePlugin(BaseViewPlugin):
             theme_menu.add_command(label=th_info["name"], command=lambda k=th_key: self.set_theme(k))
         menu.add_cascade(label="Tema (Theme)", menu=theme_menu)
 
-        # Diameter / Size Submenu
-        size_menu = tk.Menu(menu, tearoff=0, bg="#161b22", fg="#f0f6fc", activebackground="#1f6feb", activeforeground="#ffffff")
-        size_menu.add_command(label="Mini (4cm / 150px)", command=lambda: self.set_size(150))
-        size_menu.add_command(label="Kecil (5cm / 190px - Default)", command=lambda: self.set_size(190))
-        size_menu.add_command(label="Sedang (6.5cm / 240px)", command=lambda: self.set_size(240))
-        menu.add_cascade(label="Ukuran (Diameter)", menu=size_menu)
+        # Sensor status / service section
+        menu.add_separator()
+        menu.add_command(
+            label="Sensor: AKTIF" if self.has_data else "Sensor: TIDAK AKTIF",
+            state="disabled",
+        )
+        requires_helper = False
+        if hasattr(self.sensor_monitor, 'requires_helper'):
+            try:
+                requires_helper = bool(self.sensor_monitor.requires_helper())
+            except Exception:
+                requires_helper = False
+        if requires_helper and not is_helper_running():
+            menu.add_command(label="Mulai Sensor Service (Admin)", command=self._start_sensor_service)
+        elif requires_helper:
+            menu.add_command(label="✓ Sensor Service (Admin) Berjalan", state="disabled")
+        menu.add_command(label="Buka Folder Log Sensor", command=self._open_log_dir)
+        menu.add_separator()
 
         # Window Options
         menu.add_separator()
@@ -444,36 +521,20 @@ class CompactGaugePlugin(BaseViewPlugin):
         menu.add_cascade(label="Transparansi Jendela", menu=op_menu)
 
         menu.add_separator()
-        menu.add_command(label="📊 Buka Tampilan Standar (Full Gauge)", command=self.switch_to_full_gauge)
-        menu.add_command(label="❌ Tutup Aplikasi", command=self.request_stop)
+        menu.add_command(label="🔽 Sembunyikan ke Tray", command=self._hide_to_tray)
+        menu.add_command(label="❌ Keluar", command=self._exit_app)
 
         self.context_menu = menu
 
     def toggle_autostart(self):
         current = is_autostart_enabled()
-        set_autostart(not current, view="compact")
-        self._build_context_menu()
-
-    def switch_to_full_gauge(self):
-        self.next_view = "gauge"
-        self.request_stop()
-
-    def set_style(self, style):
-        self.display_style = style
+        set_autostart(not current)
         self._build_context_menu()
 
     def set_theme(self, theme_key):
         if theme_key in THEMES:
             self.current_theme = theme_key
             self._build_context_menu()
-
-    def set_size(self, new_size):
-        self.size = new_size
-        self._load_fonts()
-        if self.root and self.canvas:
-            self.canvas.config(width=self.size, height=self.size)
-            self.root.geometry(f"{self.size}x{self.size}")
-        self._build_context_menu()
 
     def set_opacity(self, op):
         self.opacity = op
@@ -496,22 +557,6 @@ class CompactGaugePlugin(BaseViewPlugin):
                 self.root.wm_attributes("-transparentcolor", "")
                 self.canvas.config(bg="#0d1117")
         self._build_context_menu()
-
-    def _on_double_click(self, event):
-        """Toggle between compact with hub and minimalist pure analog."""
-        if self.display_style == "compact":
-            self.set_style("minimal")
-        else:
-            self.set_style("compact")
-
-    def _on_mouse_wheel(self, event):
-        """Adjust size with mouse wheel."""
-        if event.delta > 0:
-            if self.size < 280:
-                self.set_size(self.size + 20)
-        else:
-            if self.size > 130:
-                self.set_size(self.size - 20)
 
     def init_UI(self):
         self.root = tk.Tk()
@@ -549,12 +594,6 @@ class CompactGaugePlugin(BaseViewPlugin):
         # Context menu
         self.canvas.bind("<Button-3>", self._show_context_menu)
 
-        # Double click to toggle mode
-        self.canvas.bind("<Double-Button-1>", self._on_double_click)
-
-        # Mouse wheel zoom
-        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
-
         self._build_context_menu()
 
     def run(self):
@@ -567,20 +606,28 @@ class CompactGaugePlugin(BaseViewPlugin):
         # Read initial temperature
         try:
             cores = self.sensor_monitor.get_core_temperatures()
-            if cores and len(cores) > self.target_core_index:
-                c = cores[self.target_core_index]
+            if cores:
+                core_obj = None
+                for idx, c in enumerate(cores):
+                    if idx == self.target_core_index or c.label == f"Core {self.target_core_index}":
+                        core_obj = c
+                        break
+                if core_obj is None:
+                    core_obj = cores[0]
+                c = core_obj
                 self.target_temp = float(c.current)
                 self.display_temp = self.target_temp
-                self.min_temp = self.target_temp
-                self.max_temp = self.target_temp
-                self.critical_temp = float(c.critical)
-                self.high_temp = float(c.high)
                 self.core_label = c.label
+                self.has_data = True
         except Exception:
-            pass
+            self.has_data = False
 
         # Start 60 FPS animation loop
         self._anim_loop()
+
+        # Start system tray icon in a background thread
+        tray_thread = threading.Thread(target=self._start_tray, daemon=True)
+        tray_thread.start()
 
         try:
             self.root.mainloop()
@@ -588,13 +635,13 @@ class CompactGaugePlugin(BaseViewPlugin):
             pass
         finally:
             self.running = False
-            if not getattr(self, 'next_view', None):
-                self.sensor_monitor.close()
+            if self.tray_icon is not None:
+                try:
+                    self.tray_icon.stop()
+                except Exception:
+                    pass
+            self.sensor_monitor.close()
 
     def request_stop(self):
-        self.running = False
-        if self.root:
-            try:
-                self.root.destroy()
-            except Exception:
-                pass
+        # Hide to tray instead of quitting; use _exit_app to really quit.
+        self._hide_to_tray()

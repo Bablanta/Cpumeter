@@ -2,7 +2,7 @@
 ; Turnkey Windows Installer with auto-shortcut, auto-start, and clean uninstaller
 
 #define MyAppName "CpuCore0Meter"
-#define MyAppVersion "1.2"
+#define MyAppVersion "1.4"
 #define MyAppPublisher "CpuMeter"
 #define MyAppExeName "CpuCore0Meter.exe"
 
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=dist_installer
-OutputBaseFilename=CpuCore0Meter_Setup_v1.2
+OutputBaseFilename=CpuCore0Meter_Setup_v1.4
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -34,19 +34,17 @@ Name: "autostart"; Description: "Jalankan otomatis saat Windows dinyalakan (Run 
 [Files]
 Source: "dist\CpuCore0Meter.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LibreHardwareMonitorLib.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "run_compact.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "run.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}\CpuCore0Meter (Compact 5cm)"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--view compact --core 0"
-Name: "{autoprograms}\{#MyAppName}\CpuCore0Meter (Full Gauge)"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--view gauge --core 0"
+Name: "{autoprograms}\{#MyAppName}\CpuCore0Meter (Compact 4cm)"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--core 0"
 Name: "{autoprograms}\{#MyAppName}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--view compact --core 0"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--core 0"; Tasks: desktopicon
 
 [Registry]
 ; Register in HKCU Run for auto-start on boot if task is selected
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --view compact --core 0"; Tasks: autostart; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --core 0"; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--view compact --core 0"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--core 0"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

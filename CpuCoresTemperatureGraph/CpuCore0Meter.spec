@@ -3,7 +3,11 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('LibreHardwareMonitorLib.dll', '.'), ('plugins', 'plugins')]
 binaries = []
-hiddenimports = ['plugins.gauge_view', 'plugins.graph_view', 'plugins.compact_gauge', 'plugins.autostart']
+hiddenimports = [
+    'plugins.compact_gauge', 'plugins.autostart',
+    'plugins.sensor_helper', 'plugins.sensor_client', 'plugins.sensor_shared', 'plugins.logging_setup',
+    'pystray',
+]
 tmp_ret = collect_all('pythonnet')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('clr_loader')
@@ -35,7 +39,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

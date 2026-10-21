@@ -8,12 +8,14 @@ import platform
 import os
 import sys
 import time
-from collections import namedtuple
+import logging
 
+from plugins.sensor_shared import CoreTemp
+from plugins.logging_setup import init_logging
 
-VERSION = "1.2"
+logger = logging.getLogger(__name__)
 
-CoreTemp = namedtuple('CoreTemp', ['label', 'current', 'high', 'critical'])
+VERSION = "1.4"
 
 
 def get_processor_info():
@@ -43,6 +45,17 @@ def get_processor_info():
     return ""
 
 
+def is_admin():
+    """Whether the current process has administrator privileges (Windows)."""
+    if platform.system() != "Windows":
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 class TemperatureMonitor(object):
     """Cross-platform CPU temperature monitor supporting Linux, Windows, and macOS."""
 
@@ -51,6 +64,8 @@ class TemperatureMonitor(object):
         self.lhm_computer = None
         self._wmi_cached_results = []
         self._wmi_last_poll = 0.0
+        self.sensor_source = "none"
+        self.last_error = None
         if self.os_name == "Windows":
             self._init_windows()
 
@@ -69,16 +84,25 @@ class TemperatureMonitor(object):
                     dll_path = p
                     break
 
-            if dll_path:
-                clr.AddReference(os.path.abspath(dll_path))
-                from LibreHardwareMonitor.Hardware import Computer
-                self.lhm_computer = Computer()
-                self.lhm_computer.IsCpuEnabled = True
-                self.lhm_computer.Open()
-                for h in self.lhm_computer.Hardware:
-                    h.Update()
-        except Exception:
+            if not dll_path:
+                self.last_error = "LibreHardwareMonitorLib.dll not found"
+                logger.error("LHM init failed: %s", self.last_error)
+                return
+
+            clr.AddReference(os.path.abspath(dll_path))
+            from LibreHardwareMonitor.Hardware import Computer
+            self.lhm_computer = Computer()
+            self.lhm_computer.IsCpuEnabled = True
+            self.lhm_computer.Open()
+            for h in self.lhm_computer.Hardware:
+                h.Update()
+            self.sensor_source = "lhm"
+            logger.info("LibreHardwareMonitor initialized (source=lhm, elevated=%s)", is_admin())
+        except Exception as e:
             self.lhm_computer = None
+            self.sensor_source = "none"
+            self.last_error = "LHM init failed: %r" % (e,)
+            logger.warning(self.last_error)
 
     def get_core_temperatures(self):
         if self.os_name == "Linux":
@@ -173,8 +197,13 @@ class TemperatureMonitor(object):
                     results.append(CoreTemp(label=label, current=cur, high=crit-15.0, critical=crit))
                 if results:
                     self._wmi_cached_results = results
+                    self.sensor_source = "wmi"
+                    self.last_error = None
+                    logger.info("WMI thermal zone fallback active (source=wmi)")
                 return self._wmi_cached_results
-            except Exception:
+            except Exception as e:
+                self.last_error = "WMI fallback failed: %r" % (e,)
+                logger.debug(self.last_error)
                 return self._wmi_cached_results or []
 
         return []
@@ -192,11 +221,16 @@ def parseArgs():
 
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode. (default: False).")
     parser.add_argument(
+        "--sensor-helper",
+        dest="sensor_helper",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--view", "--plugin",
         dest="view",
-        choices=["gauge", "compact", "mini", "graph"],
-        default="gauge",
-        help="Display view to use: 'gauge' (full circular gauge), 'compact'/'mini' (smooth 4K 5cm mini analog meter), or 'graph' (line chart)."
+        default="compact",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--style",
@@ -209,33 +243,61 @@ def parseArgs():
         "--core",
         dest="core",
         default="0",
-        help="Target CPU core to display, e.g. 0 for Core 0 (default: 0). Use 'all' to show all cores in graph mode."
+        help="Target CPU core to display, e.g. 0 for Core 0 (default: 0)."
     )
     parser.add_argument(
         "--theme",
         dest="theme",
-        choices=["dark_luxury", "cyberpunk", "minimal_silver", "sport_racing"],
+        choices=["dark_luxury", "cyberpunk", "sport_racing"],
         default="dark_luxury",
-        help="Color theme: 'dark_luxury', 'cyberpunk', 'minimal_silver', or 'sport_racing' (default: dark_luxury)."
+        help="Color theme: 'dark_luxury', 'cyberpunk', or 'sport_racing' (default: dark_luxury)."
     )
     parser.add_argument("--top", action="store_true", help="Keep window always on top.")
     parser.add_argument("--enable-autostart", action="store_true", help="Enable automatic startup on Windows boot.")
     parser.add_argument("--disable-autostart", action="store_true", help="Disable automatic startup on Windows boot.")
     parser.add_argument("--status-autostart", action="store_true", help="Check whether automatic startup is enabled.")
-    parser.add_argument("--window-size", type=int, default=600, help="Window history size for graph view.")
-    parser.add_argument("--refresh-time", type=float, default=0.5, help="Refresh time in seconds.")
 
     options = parser.parse_args()
+
+    # The application only ships the compact mini meter now. Legacy values
+    # ("gauge", "graph", ...) are still accepted so that older autostart
+    # registry entries and old shortcuts keep working.
+    if options.view not in ("compact", "mini"):
+        logger.warning("view '%s' is no longer available, using the compact mini meter", options.view)
+    options.view = "compact"
+
     return options
 
 
+def create_monitor():
+    """
+    Choose the sensor backend:
+    - Windows, unelevated  -> read through the elevated helper (loopback TCP)
+    - Windows, elevated    -> in-process hardware monitor (dev / installed-as-admin)
+    - Linux/macOS          -> in-process monitor
+    """
+    if platform.system() == "Windows" and not is_admin():
+        from plugins.sensor_client import RemoteSensorMonitor
+        logger.info("Unelevated process: using remote sensor helper over loopback TCP")
+        return RemoteSensorMonitor()
+    logger.info("Using in-process hardware monitor (elevated=%s)", is_admin())
+    return TemperatureMonitor()
+
+
 if __name__ == '__main__':
+    init_logging(verbose=("-v" in sys.argv) or ("--verbose" in sys.argv))
+
     options = parseArgs()
+
+    if options.sensor_helper:
+        from plugins.sensor_helper import run_sensor_helper
+        logger.info("Starting sensor helper process (pid=%d)", os.getpid())
+        sys.exit(run_sensor_helper(TemperatureMonitor(), get_processor_info))
 
     if options.enable_autostart:
         from plugins.autostart import set_autostart
-        set_autostart(True, view=options.view)
-        print(f"CpuCore0Meter autostart enabled successfully for view: '{options.view}'")
+        set_autostart(True)
+        print("CpuCore0Meter autostart enabled successfully.")
         sys.exit(0)
     elif options.disable_autostart:
         from plugins.autostart import set_autostart
@@ -247,22 +309,10 @@ if __name__ == '__main__':
         print(f"CpuCore0Meter autostart status: {'ENABLED' if is_autostart_enabled() else 'DISABLED'}")
         sys.exit(0)
 
-    sensor_monitor = TemperatureMonitor()
+    sensor_monitor = create_monitor()
 
-    current_view = options.view
     try:
-        while current_view:
-            if current_view in ("compact", "mini"):
-                from plugins.compact_gauge import CompactGaugePlugin
-                plugin = CompactGaugePlugin(sensor_monitor, get_processor_info, options)
-            elif current_view == "graph":
-                from plugins.graph_view import GraphViewPlugin
-                plugin = GraphViewPlugin(sensor_monitor, get_processor_info, options)
-            else:
-                from plugins.gauge_view import GaugeViewPlugin
-                plugin = GaugeViewPlugin(sensor_monitor, get_processor_info, options)
-
-            plugin.run()
-            current_view = getattr(plugin, 'next_view', None)
+        from plugins.compact_gauge import CompactGaugePlugin
+        CompactGaugePlugin(sensor_monitor, get_processor_info, options).run()
     finally:
         sensor_monitor.close()

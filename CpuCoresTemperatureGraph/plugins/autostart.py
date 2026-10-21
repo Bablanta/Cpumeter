@@ -30,9 +30,9 @@ def is_autostart_enabled() -> bool:
         return False
 
 
-def set_autostart(enabled: bool, view: str = "compact") -> bool:
+def set_autostart(enabled: bool) -> bool:
     """
-    Enables or disables autostart at Windows boot.
+    Enables or disables autostart at Windows boot (compact mini meter only).
     Returns the new autostart state (True if enabled, False if disabled).
     """
     if platform.system() != "Windows":
@@ -45,7 +45,7 @@ def set_autostart(enabled: bool, view: str = "compact") -> bool:
                 # 1. If running as a frozen PyInstaller executable
                 if getattr(sys, 'frozen', False):
                     exe_path = os.path.abspath(sys.executable)
-                    cmd = f'"{exe_path}" --view {view} --core 0'
+                    cmd = f'"{exe_path}" --core 0'
                 else:
                     # 2. Check installed / desktop standalone candidates
                     user_profile = os.environ.get("USERPROFILE", os.path.expanduser("~"))
@@ -62,14 +62,14 @@ def set_autostart(enabled: bool, view: str = "compact") -> bool:
                             break
 
                     if found_exe:
-                        cmd = f'"{found_exe}" --view {view} --core 0'
+                        cmd = f'"{found_exe}" --core 0'
                     else:
                         py_exe = os.path.abspath(sys.executable)
                         pyw_candidate = os.path.join(os.path.dirname(py_exe), "pythonw.exe")
                         if os.path.exists(pyw_candidate):
                             py_exe = pyw_candidate
                         script_path = os.path.abspath(sys.argv[0])
-                        cmd = f'"{py_exe}" "{script_path}" --view {view} --core 0'
+                        cmd = f'"{py_exe}" "{script_path}" --core 0'
 
                 winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, cmd)
                 return True
