@@ -21,6 +21,7 @@ Features:
 
 import math
 import os
+import sys
 import time
 import threading
 import tkinter as tk
@@ -388,8 +389,28 @@ class CompactGaugePlugin(BaseViewPlugin):
         except Exception:
             pass
 
+    @staticmethod
+    def _find_icon():
+        candidates = [
+            os.path.join(getattr(sys, '_MEIPASS', ''), 'CpuCore0Meter.ico'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'CpuCore0Meter.ico'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CpuCore0Meter.ico'),
+            os.path.abspath('CpuCore0Meter.ico'),
+        ]
+        for c in candidates:
+            if c and os.path.exists(c):
+                return c
+        return None
+
     def _create_tray_image(self):
-        """Build a small tray icon image (a colored circle)."""
+        """Build tray icon image: loads CpuCore0Meter.ico if available, or renders procedural fallback."""
+        icon_path = self._find_icon()
+        if icon_path:
+            try:
+                return Image.open(icon_path)
+            except Exception:
+                pass
+
         size = 64
         img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
@@ -565,6 +586,13 @@ class CompactGaugePlugin(BaseViewPlugin):
         self.root.overrideredirect(True)  # Frameless floating widget
         self.root.wm_attributes("-topmost", self.always_on_top)
         self.root.wm_attributes("-alpha", self.opacity)
+
+        icon_path = self._find_icon()
+        if icon_path:
+            try:
+                self.root.iconbitmap(icon_path)
+            except Exception:
+                pass
 
         # Transparent circular shape
         if self.transparent_circle:

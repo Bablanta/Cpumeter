@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-import math
 import psutil
 import platform
 import os
@@ -15,7 +14,7 @@ from plugins.logging_setup import init_logging
 
 logger = logging.getLogger(__name__)
 
-VERSION = "1.4"
+VERSION = "1.5"
 
 
 def get_processor_info():

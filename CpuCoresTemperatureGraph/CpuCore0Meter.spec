@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('LibreHardwareMonitorLib.dll', '.'), ('plugins', 'plugins')]
+datas = [('LibreHardwareMonitorLib.dll', '.'), ('plugins', 'plugins'), ('CpuCore0Meter.ico', '.')]
 binaries = []
 hiddenimports = [
     'plugins.compact_gauge', 'plugins.autostart',
@@ -48,4 +48,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='CpuCore0Meter.ico',
 )

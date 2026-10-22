@@ -99,7 +99,7 @@ Compact mini meter:
 
 ### Option A — Prebuilt installer (recommended)
 
-1. Download `CpuCore0Meter_Setup_v1.4.exe` from the
+1. Download `CpuCore0Meter_Setup_v1.5.exe` from the
    [Releases page](https://github.com/Bablanta/Cpumeter/releases) and copy it to the target
    machine (USB drive, file share, ...).
 
@@ -125,14 +125,22 @@ run.bat
 
 ### Rebuilding the executable and the installer
 
-```bat
-build_windows.bat
-```
+- **Build standalone executable**:
+  ```bat
+  build_windows.bat
+  ```
+  Outputs `dist\CpuCore0Meter.exe` with bundled icon.
 
-Requires the local virtual environment (see *Requirements*) and Inno Setup 6 with
-`ISCC.exe` (auto-detected in `Program Files`, `Program Files (x86)` or
-`%LOCALAPPDATA%\Programs`). Outputs `dist\CpuCore0Meter.exe` and
-`dist_installer\CpuCore0Meter_Setup_v1.4.exe`.
+- **Build setup installer**:
+  ```bat
+  build_installer.bat
+  ```
+  Requires Inno Setup 6 with `ISCC.exe`. Outputs `dist_installer\CpuCore0Meter_Setup_v1.5.exe`.
+
+- **Build both in one command**:
+  ```bat
+  build_all.bat
+  ```
 
 ### Reading CPU temperatures ("Sensor tidak aktif" / no data)
 
